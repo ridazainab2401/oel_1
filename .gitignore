@@ -1,0 +1,16 @@
+/myenv
+
+ThreadedFileSystem.py
+ThreadedFileSystemGUI.py
+
+input_thread0.txt
+input_thread1.txt
+output_thread0.txt
+output_thread1.txt
+
+
+__pycache__
+
+.vscode
+
+filesystem.dat
