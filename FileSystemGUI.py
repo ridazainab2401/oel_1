@@ -112,7 +112,9 @@ class FileSystemGUI:
             ("↔️ Move", self.move_item),
             ("📂 Open", self.open_file),
             ("✏️ Write", self.write_file),
-            ("📖 Read", self.read_file)
+            ("📖 Read", self.read_file),
+            ("✂️ Truncate", self.truncate_file),
+            ("⇄ Move Content", self.move_content)
         ]
         
         for text, command in operations:
@@ -124,10 +126,20 @@ class FileSystemGUI:
         bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # File content area with custom styling
-        content_label = ttk.Label(bottom_frame, text="File Content:", font=('Helvetica', 10, 'bold'))
-        content_label.pack(anchor=tk.W)
+        content_frame = ttk.Frame(bottom_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.content_text = scrolledtext.ScrolledText(bottom_frame, 
+        content_header = ttk.Frame(content_frame)
+        content_header.pack(fill=tk.X)
+        
+        content_label = ttk.Label(content_header, text="File Content:", font=('Helvetica', 10, 'bold'))
+        content_label.pack(side=tk.LEFT)
+        
+        # Add file info label
+        self.file_info_label = ttk.Label(content_header, text="", font=('Helvetica', 9))
+        self.file_info_label.pack(side=tk.RIGHT)
+        
+        self.content_text = scrolledtext.ScrolledText(content_frame, 
                                                     height=10, 
                                                     font=('Consolas', 10),
                                                     bg=self.tree_bg,
@@ -168,7 +180,8 @@ class FileSystemGUI:
         # Add files
         for name, file_obj in self.fs.cwd.files.items():
             size = len(file_obj.data)
-            self.file_list.insert("", "end", values=(name, "📄 File", f"{size} bytes"))
+            status = "Open" if file_obj.is_open else "Closed"
+            self.file_list.insert("", "end", values=(name, "📄 File", f"{size} bytes ({status})"))
         
         self.update_status(f"Displaying contents of {self.fs.cwd_path()}")
 
@@ -390,55 +403,283 @@ class FileSystemGUI:
         ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
 
     def write_file(self):
+        selection = self.file_list.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a file to write to")
+            return
+        
+        item = self.file_list.item(selection[0])
+        if item['values'][1] != "📄 File":
+            messagebox.showwarning("Warning", "Please select a file")
+            return
+        
+        name = item['values'][0]
         dialog = tk.Toplevel(self.root)
         dialog.title("Write to File")
-        dialog.geometry("300x200")
+        dialog.geometry("400x300")
+        dialog.configure(bg=self.bg_color)
         
-        ttk.Label(dialog, text="File Descriptor:").pack(pady=5)
-        fd_entry = ttk.Entry(dialog)
-        fd_entry.pack(pady=5)
+        # Mode selection
+        mode_frame = ttk.Frame(dialog)
+        mode_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Label(dialog, text="Text:").pack(pady=5)
-        text_entry = ttk.Entry(dialog)
-        text_entry.pack(pady=5)
+        ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT)
+        mode_var = tk.StringVar(value="append")
+        
+        ttk.Radiobutton(mode_frame, text="Append", variable=mode_var, value="append").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(mode_frame, text="Write At Position", variable=mode_var, value="write_at").pack(side=tk.LEFT, padx=5)
+        
+        # Position entry (only shown for write_at mode)
+        pos_frame = ttk.Frame(dialog)
+        pos_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(pos_frame, text="Position:").pack(side=tk.LEFT)
+        pos_entry = ttk.Entry(pos_frame)
+        pos_entry.pack(side=tk.LEFT, padx=5)
+        pos_entry.pack_forget()  # Initially hidden
+        
+        # Text entry
+        text_frame = ttk.Frame(dialog)
+        text_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(text_frame, text="Text:").pack(side=tk.LEFT)
+        text_entry = ttk.Entry(text_frame)
+        text_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        def on_mode_change(*args):
+            if mode_var.get() == "write_at":
+                pos_entry.pack(side=tk.LEFT, padx=5)
+            else:
+                pos_entry.pack_forget()
+        
+        mode_var.trace("w", on_mode_change)
         
         def on_ok():
             try:
-                fd = int(fd_entry.get())
                 text = text_entry.get()
-                self.fs.write(fd, text)
+                if mode_var.get() == "append":
+                    self.fs.write(name, text)
+                    self.update_status(f"Appended text to {name}")
+                else:
+                    pos = int(pos_entry.get())
+                    if pos < 0:
+                        raise ValueError("Position must be non-negative")
+                    self.fs.write_at(name, pos, text)
+                    self.update_status(f"Wrote text at position {pos} in {name}")
+                
+                self.update_file_list()
                 dialog.destroy()
-            except ValueError:
-                messagebox.showwarning("Warning", "Invalid file descriptor")
+            except ValueError as e:
+                messagebox.showerror("Error", str(e))
         
         ttk.Button(dialog, text="Write", command=on_ok).pack(pady=5)
 
     def read_file(self):
+        selection = self.file_list.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a file to read")
+            return
+        
+        item = self.file_list.item(selection[0])
+        if item['values'][1] != "📄 File":
+            messagebox.showwarning("Warning", "Please select a file")
+            return
+        
+        name = item['values'][0]
         dialog = tk.Toplevel(self.root)
         dialog.title("Read File")
-        dialog.geometry("300x150")
+        dialog.geometry("400x300")
+        dialog.configure(bg=self.bg_color)
         
-        ttk.Label(dialog, text="File Descriptor:").pack(pady=5)
-        fd_entry = ttk.Entry(dialog)
-        fd_entry.pack(pady=5)
+        # Mode selection
+        mode_frame = ttk.Frame(dialog)
+        mode_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT)
+        mode_var = tk.StringVar(value="sequential")
+        
+        ttk.Radiobutton(mode_frame, text="Sequential", variable=mode_var, value="sequential").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(mode_frame, text="Read From Position", variable=mode_var, value="read_from").pack(side=tk.LEFT, padx=5)
+        
+        # Parameters frame (only shown for read_from mode)
+        params_frame = ttk.Frame(dialog)
+        params_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Start position
+        start_frame = ttk.Frame(params_frame)
+        start_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(start_frame, text="Start Position:").pack(side=tk.LEFT)
+        start_entry = ttk.Entry(start_frame)
+        start_entry.pack(side=tk.LEFT, padx=5)
+        start_frame.pack_forget()  # Initially hidden
+        
+        # Size
+        size_frame = ttk.Frame(params_frame)
+        size_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(size_frame, text="Size:").pack(side=tk.LEFT)
+        size_entry = ttk.Entry(size_frame)
+        size_entry.pack(side=tk.LEFT, padx=5)
+        size_frame.pack_forget()  # Initially hidden
+        
+        def on_mode_change(*args):
+            if mode_var.get() == "read_from":
+                start_frame.pack(fill=tk.X, pady=2)
+                size_frame.pack(fill=tk.X, pady=2)
+            else:
+                start_frame.pack_forget()
+                size_frame.pack_forget()
+        
+        mode_var.trace("w", on_mode_change)
         
         def on_ok():
             try:
-                fd = int(fd_entry.get())
-                # Clear the content area
-                self.content_text.delete(1.0, tk.END)
-                # Read the file content
-                self.fs.read(fd)
-                # Get the content from the file system
-                if fd in self.fs.fd_table:
-                    file_obj = self.fs.fd_table[fd]
-                    content = file_obj.read()
+                if mode_var.get() == "sequential":
+                    # Clear the content area
+                    self.content_text.delete(1.0, tk.END)
+                    # Read the file content
+                    content = self.fs.read(name)
                     self.content_text.insert(tk.END, content)
+                    self.update_status(f"Read entire content of {name}")
+                else:
+                    start = int(start_entry.get())
+                    size = int(size_entry.get())
+                    if start < 0 or size < 0:
+                        raise ValueError("Start position and size must be non-negative")
+                    
+                    # Clear the content area
+                    self.content_text.delete(1.0, tk.END)
+                    # Read the specified range
+                    content = self.fs.read_range(name, start, size)
+                    self.content_text.insert(tk.END, content)
+                    self.update_status(f"Read {size} bytes from position {start} in {name}")
+                
                 dialog.destroy()
-            except ValueError:
-                messagebox.showwarning("Warning", "Invalid file descriptor")
+            except ValueError as e:
+                messagebox.showerror("Error", str(e))
         
         ttk.Button(dialog, text="Read", command=on_ok).pack(pady=5)
+
+    def truncate_file(self):
+        selection = self.file_list.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a file to truncate")
+            return
+        
+        item = self.file_list.item(selection[0])
+        if item['values'][1] != "📄 File":
+            messagebox.showwarning("Warning", "Please select a file")
+            return
+        
+        name = item['values'][0]
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Truncate File")
+        dialog.geometry("300x150")
+        dialog.configure(bg=self.bg_color)
+        
+        ttk.Label(dialog, text=f"Truncate {name} to size:").pack(pady=5)
+        size_entry = ttk.Entry(dialog)
+        size_entry.pack(pady=5)
+        
+        def on_ok():
+            try:
+                size = int(size_entry.get())
+                if size < 0:
+                    raise ValueError("Size must be non-negative")
+                
+                self.fs.truncate(name, size)
+                self.update_file_list()
+                self.update_status(f"Truncated {name} to {size} bytes")
+                dialog.destroy()
+            except ValueError as e:
+                messagebox.showerror("Error", str(e))
+        
+        ttk.Button(dialog, text="Truncate", command=on_ok).pack(pady=5)
+
+    def move_content(self):
+        selection = self.file_list.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a file to move content from")
+            return
+        
+        item = self.file_list.item(selection[0])
+        if item['values'][1] != "📄 File":
+            messagebox.showwarning("Warning", "Please select a file")
+            return
+        
+        source_file = item['values'][0]
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Move Content")
+        dialog.geometry("400x400")
+        dialog.configure(bg=self.bg_color)
+        
+        # Source file info
+        src_frame = ttk.Frame(dialog)
+        src_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(src_frame, text=f"Source File: {source_file}").pack(side=tk.LEFT)
+        
+        # Destination file selection
+        dest_frame = ttk.Frame(dialog)
+        dest_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(dest_frame, text="Destination File:").pack(side=tk.LEFT)
+        
+        # Create a listbox for destination files
+        dest_listbox = tk.Listbox(dest_frame, height=5)
+        dest_listbox.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(dest_frame, orient=tk.VERTICAL, command=dest_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        dest_listbox.configure(yscrollcommand=scrollbar.set)
+        
+        # Populate the listbox with files
+        for name, file_obj in self.fs.cwd.files.items():
+            if name != source_file:  # Don't include source file
+                dest_listbox.insert(tk.END, name)
+        
+        # Parameters frame
+        params_frame = ttk.Frame(dialog)
+        params_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # From position
+        from_frame = ttk.Frame(params_frame)
+        from_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(from_frame, text="From Position:").pack(side=tk.LEFT)
+        from_entry = ttk.Entry(from_frame)
+        from_entry.pack(side=tk.LEFT, padx=5)
+        
+        # To position
+        to_frame = ttk.Frame(params_frame)
+        to_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(to_frame, text="To Position:").pack(side=tk.LEFT)
+        to_entry = ttk.Entry(to_frame)
+        to_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Size
+        size_frame = ttk.Frame(params_frame)
+        size_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(size_frame, text="Size:").pack(side=tk.LEFT)
+        size_entry = ttk.Entry(size_frame)
+        size_entry.pack(side=tk.LEFT, padx=5)
+        
+        def on_ok():
+            try:
+                if not dest_listbox.curselection():
+                    raise ValueError("Please select a destination file")
+                
+                dest_file = dest_listbox.get(dest_listbox.curselection())
+                from_pos = int(from_entry.get())
+                to_pos = int(to_entry.get())
+                size = int(size_entry.get())
+                
+                if from_pos < 0 or to_pos < 0 or size < 0:
+                    raise ValueError("Positions and size must be non-negative")
+                
+                self.fs.move_content(source_file, dest_file, from_pos, to_pos, size)
+                self.update_file_list()
+                self.update_status(f"Moved {size} bytes from position {from_pos} in {source_file} to position {to_pos} in {dest_file}")
+                dialog.destroy()
+            except ValueError as e:
+                messagebox.showerror("Error", str(e))
+        
+        ttk.Button(dialog, text="Move Content", command=on_ok).pack(pady=5)
 
     def on_double_click(self, event):
         selection = self.file_list.selection()

@@ -196,57 +196,70 @@ class FileSystem:
         del self.fd_table[fd]
         print(f"Closed descriptor {fd}")
 
-    def write(self, fd: int, text: str) -> None:
-        if fd not in self.fd_table:
-            print("Invalid descriptor")
+    def write(self, fname: str, text: str) -> None:
+        if fname not in self.cwd.files:
+            print("File not found")
             return
-        f = self.fd_table[fd]
+        f = self.cwd.files[fname]
         if f.mode not in ['a', 'w']:
             print("File not open for writing")
             return
         f.write(text)
-        print(f"Wrote to descriptor {fd}")
+        print(f"Wrote to file {fname}")
 
-    def write_at(self, fd: int, pos: int, text: str) -> None:
-        if fd not in self.fd_table:
-            print("Invalid descriptor")
+    def write_at(self, fname: str, pos: int, text: str) -> None:
+        if fname not in self.cwd.files:
+            print("File not found")
             return
-        f = self.fd_table[fd]
+        f = self.cwd.files[fname]
         if f.mode != 'w':
             print("File not open for writing")
             return
         f.write_at(pos, text)
-        print(f"Wrote to descriptor {fd} at position {pos}")
+        print(f"Wrote to file {fname} at position {pos}")
 
-    def read(self, fd: int) -> None:
-        if fd not in self.fd_table:
-            print("Invalid descriptor")
-            return
-        f = self.fd_table[fd]
-        print(f.read())
+    def read(self, fname: str) -> str:
+        if fname not in self.cwd.files:
+            print("File not found")
+            return ""
+        f = self.cwd.files[fname]
+        return f.read()
 
-    def read_range(self, fd: int, start: int, size: int) -> None:
-        if fd not in self.fd_table:
-            print("Invalid descriptor")
-            return
-        f = self.fd_table[fd]
-        print(f.read_range(start, size))
+    def read_range(self, fname: str, start: int, size: int) -> str:
+        if fname not in self.cwd.files:
+            print("File not found")
+            return ""
+        f = self.cwd.files[fname]
+        return f.read_range(start, size)
 
-    def move_within_file(self, fd: int, from_pos: int, to_pos: int, size: int) -> None:
-        if fd not in self.fd_table:
-            print("Invalid descriptor")
+    def move_content(self, src_file: str, dest_file: str, from_pos: int, to_pos: int, size: int) -> None:
+        if src_file not in self.cwd.files or dest_file not in self.cwd.files:
+            print("Source or destination file not found")
             return
-        f = self.fd_table[fd]
-        f.move_within(from_pos, to_pos, size)
-        print(f"Moved {size} bytes from {from_pos} to {to_pos} in descriptor {fd}")
+        src = self.cwd.files[src_file]
+        dest = self.cwd.files[dest_file]
+        
+        # Read the content from source file
+        content = src.read_range(from_pos, size)
+        
+        # Write the content to destination file
+        dest.write_at(to_pos, content)
+        
+        # Remove the content from source file
+        if from_pos + size <= len(src.data):
+            src.data[from_pos:from_pos + size] = []
+        else:
+            src.data = src.data[:from_pos]
+        
+        print(f"Moved {size} bytes from {src_file} to {dest_file}")
 
-    def truncate(self, fd: int, size: int) -> None:
-        if fd not in self.fd_table:
-            print("Invalid descriptor")
+    def truncate(self, fname: str, size: int) -> None:
+        if fname not in self.cwd.files:
+            print("File not found")
             return
-        f = self.fd_table[fd]
+        f = self.cwd.files[fname]
         f.truncate(size)
-        print(f"Truncated descriptor {fd} to {size}")
+        print(f"Truncated file {fname} to {size} bytes")
 
     def show_memory_map(self) -> None:
         print(f"Memory Map - Files in {self.cwd_path()}:")
@@ -336,44 +349,45 @@ class FileSystem:
                 elif op == "Write":
                     if len(parts) > 2:
                         try:
-                            fd = int(parts[1])
+                            fname = parts[1]
                             if len(parts) > 3:
                                 pos = int(parts[2])
                                 text = ' '.join(parts[3:])
-                                self.write_at(fd, pos, text)
+                                self.write_at(fname, pos, text)
                             else:
                                 text = ' '.join(parts[2:])
-                                self.write(fd, text)
+                                self.write(fname, text)
                         except ValueError:
-                            print("Invalid file descriptor")
+                            print("Invalid file name")
                 elif op == "Read":
                     if len(parts) > 1:
                         try:
-                            fd = int(parts[1])
+                            fname = parts[1]
                             if len(parts) > 3:
                                 start = int(parts[2])
                                 size = int(parts[3])
-                                self.read_range(fd, start, size)
+                                self.read_range(fname, start, size)
                             else:
-                                self.read(fd)
+                                self.read(fname)
                         except ValueError:
-                            print("Invalid file descriptor")
-                elif op == "MoveWithin":
-                    if len(parts) > 4:
+                            print("Invalid file name")
+                elif op == "MoveContent":
+                    if len(parts) > 5:
                         try:
-                            fd = int(parts[1])
-                            from_pos = int(parts[2])
-                            to_pos = int(parts[3])
-                            size = int(parts[4])
-                            self.move_within_file(fd, from_pos, to_pos, size)
+                            src_file = parts[1]
+                            dest_file = parts[2]
+                            from_pos = int(parts[3])
+                            to_pos = int(parts[4])
+                            size = int(parts[5])
+                            self.move_content(src_file, dest_file, from_pos, to_pos, size)
                         except ValueError:
                             print("Invalid parameters")
                 elif op == "Truncate":
                     if len(parts) > 2:
                         try:
-                            fd = int(parts[1])
+                            fname = parts[1]
                             size = int(parts[2])
-                            self.truncate(fd, size)
+                            self.truncate(fname, size)
                         except ValueError:
                             print("Invalid parameters")
                 elif op == "ShowMem":
@@ -394,10 +408,10 @@ class FileSystem:
         print(" Move <src> <dst>")
         print(" Open <fname> <mode:r/w/a>")
         print(" Close <fd>")
-        print(" Write <fd> [pos] <text>")
-        print(" Read <fd> [start size]")
-        print(" MoveWithin <fd> <from> <to> <size>")
-        print(" Truncate <fd> <size>")
+        print(" Write <fname> [pos] <text>")
+        print(" Read <fname> [start size]")
+        print(" MoveContent <src_file> <dest_file> <from_pos> <to_pos> <size>")
+        print(" Truncate <fname> <size>")
         print(" ShowMem")
         print(" ShowFiles")
         print(" exit")
